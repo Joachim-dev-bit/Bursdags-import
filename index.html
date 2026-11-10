@@ -72,7 +72,7 @@ footer{margin-top:25px;color:#747d85;font-size:11px;text-align:center}
    <div class="stats"><div class="stat"><b id="count">0</b><span>Bursdager</span></div><div class="stat"><b id="guests">0</b><span>Gjester</span></div><div class="stat"><b id="rooms">0</b><span>Rom i bruk</span></div></div>
    <div style="overflow:auto"><table><thead><tr><th>START</th><th>ROOM / TIME / NBR</th><th>BIRTHDAY NAME</th><th>AGE</th><th>ORDER</th><th>BOOKING NOTES</th><th>BOOKING NAME</th></tr></thead><tbody id="rows"></tbody></table></div>
    <div class="peppes"><h3>Peppes – bestillingsgrunnlag</h3>
-<p style="color:var(--muted);font-size:12px;margin:0 0 8px">Fylles automatisk fra dagens ROLLER-import. Kun pizzatyper og antall vises; rømmedressing og andre tillegg utelates. Leveringstid beregnes til 15 minutter før bursdagen starter på rommet.</p>
+<p style="color:var(--muted);font-size:12px;margin:0 0 8px">Fylles automatisk fra dagens ROLLER-import. Kun pizzatyper og antall vises; rømmedressing og andre tillegg utelates. Siste klokkeslett i ROLLER er når bursdagen er ferdig. Romstart vises 45 minutter før dette. Pizza leveres 60 minutter før sluttid (15 minutter før romstart).</p>
 <textarea id="peppesOrder" rows="9" style="width:100%;resize:vertical;background:#171a1d;color:#e6e1d7;border:1px solid var(--line);border-radius:10px;padding:13px;font:13px/1.5 'Segoe UI',Arial,sans-serif"></textarea>
 <div class="actions no-print"><button class="btn primary" id="email">Åpne e-post i Outlook</button><button class="btn" id="copy">Kopier bestilling</button></div></div>
   </div>
@@ -109,10 +109,19 @@ function itemSummary(items){return items.map(x=>x.replace(/\s+/g," ").trim()).jo
 function getBookingName(b){return [b["First Name"],b["Last Name"]].filter(Boolean).join(" ")||b["Booking Name"]||""}
 function makeBooking(b){
  const items=splitItems(b.Items);
- // Only actual Peppes pizzas belong in the email. Exclude dressing and other add-ons.
+ // Pizzene skal vises både på bursdagsarket og i Peppes-bestillingen.
+ // Rømmedressing og andre tillegg skal ikke behandles som pizza.
  const peppes=items.filter(x=>/peppes\s*pizza/i.test(x) && !/rømmedressing|rommedressing|dressing/i.test(x));
  const other=items.filter(x=>!/peppes\s*pizza/i.test(x));
- return {raw:b,start:time24(b["Session Start Time"]),room:(b.Locations||"").split(",")[0].trim(),end:time24(b["Session End Time"]),guests:b.Guests||"",birthday:b["First Name"]||b["Booking Name"]||"",age:"",order:itemSummary(other),notes:[b.Comments,b["POS Notes"]].filter(Boolean).join("\n"),booking:b["Booking Name"]||getBookingName(b),peppes};
+ const pizzaForSheet=peppes.map(x=>{
+   const m=x.match(/^\s*(\d+)\s*x\s*(.+?)\s*$/i);
+   if(!m)return x;
+   const name=m[2].replace(/^Peppes\s*Pizza(?:\s+Glutenfritt)?(?:\s*\([^)]*\))?\s*(?:-\s*)?/i,"").trim();
+   return `${m[1]} x ${name}`;
+ });
+ const end=time24(b["Session End Time"]);
+ const roomStart=addMinutes(end,-45);
+ return {raw:b,start:time24(b["Session Start Time"]),room:(b.Locations||"").split(",")[0].trim(),end,roomStart,guests:b.Guests||"",birthday:b["First Name"]||b["Booking Name"]||"",age:"",order:itemSummary([...other,...pizzaForSheet]),notes:[b.Comments,b["POS Notes"]].filter(Boolean).join("\n"),booking:b["Booking Name"]||getBookingName(b),peppes};
 }
 function render(){
  const date=$("date").value;const list=bookings.filter(b=>parseDate(b.raw["Booking Date"])===date).sort((a,b)=>a.start.localeCompare(b.start));
@@ -121,7 +130,7 @@ function render(){
  $("print").disabled=false;$("daylabel").textContent=fmtDate(date);$("filename").textContent=sourceName;
  $("count").textContent=list.length;$("guests").textContent=list.reduce((s,b)=>s+(parseInt(b.guests,10)||0),0);
  $("rooms").textContent=new Set(list.map(b=>b.room).filter(Boolean)).size;
- $("rows").innerHTML=list.map(b=>`<tr><td>${esc(b.start)}</td><td>${esc(b.room)}<br>${esc(b.end)} / ${esc(b.guests)}</td><td>${esc(b.birthday)}</td><td>${esc(b.age)}</td><td class="order">${esc(b.order)}</td><td class="notes">${esc(b.notes)}</td><td>${esc(b.booking)}</td></tr>`).join("");
+ $("rows").innerHTML=list.map(b=>`<tr><td>${esc(b.start)}</td><td>${esc(b.room)}<br>${esc(b.roomStart)} / ${esc(b.guests)}</td><td>${esc(b.birthday)}</td><td>${esc(b.age)}</td><td class="order">${esc(b.order)}</td><td class="notes">${esc(b.notes)}</td><td>${esc(b.booking)}</td></tr>`).join("");
  window.currentDay=list;
  $("peppesOrder").value=buildPeppesOrder(list);
 }
@@ -150,21 +159,24 @@ $("drop").addEventListener("dragleave",()=> $("drop").classList.remove("over"));
 $("drop").addEventListener("drop",e=>{e.preventDefault();$("drop").classList.remove("over");loadFile(e.dataTransfer.files[0])});
 $("print").addEventListener("click",()=>window.print());
 $("reset").addEventListener("click",()=>{bookings=[];sourceName="";$("file").value="";$("status").className="status";$("status").textContent="Ingen fil importert ennå.";$("empty").hidden=false;$("result").hidden=true;$("print").disabled=true});
-function minusMinutes(t, mins){
+function addMinutes(t, mins){
  if(!t || !/^\d{1,2}:\d{2}$/.test(t)) return "";
- const [h,m]=t.split(":").map(Number), d=new Date(2000,0,1,h,m-mins);
+ const [h,m]=t.split(":").map(Number), d=new Date(2000,0,1,h,m+mins);
  return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
 function buildPeppesOrder(list){
  const byDelivery=new Map();
  list.forEach(b=>{
-   const delivery=minusMinutes(b.start,15);
+   // ROLLER Session End Time er tidspunktet bursdagen er ferdig.
+   // Bursdagsrommet varer 45 minutter. Pizza skal leveres 15 minutter før rommet starter,
+   // altså 60 minutter før sluttiden som står sist i ROLLER.
+   const delivery=addMinutes(b.end,-60);
    if(!delivery) return;
    b.peppes.forEach(raw=>{
-     // ROLLER format example: 2 x Peppes Pizza (Full Pakke) - Ham
-     const m=raw.match(/^\s*(\d+)\s*x\s*Peppes\s*Pizza(?:\s*\([^)]*\))?\s*-\s*(.+?)\s*$/i);
+     // ROLLER formats: "2 x Peppes Pizza (Full Pakke) - Ham" and "1 x Glutenfri Ham Liten".
+     const m=raw.match(/^\s*(\d+)\s*x\s*(?:Peppes\s*Pizza(?:\s+Glutenfritt)?(?:\s*\([^)]*\))?\s*(?:-\s*)?)?(.+?)\s*$/i);
      if(!m) return;
-     const pizza=m[2].trim();
+     const pizza=m[2].trim().replace(/^Peppes\s*Pizza(?:\s+Glutenfritt)?(?:\s*\([^)]*\))?\s*(?:-\s*)?/i, "").trim();
      if(/rømmedressing|rommedressing|dressing/i.test(pizza)) return;
      if(!byDelivery.has(delivery)) byDelivery.set(delivery,new Map());
      const counts=byDelivery.get(delivery);
